@@ -368,8 +368,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:1
 .shell{display:grid;grid-template-columns:230px 1fr;min-height:100vh}
 .sidebar{background:#FFFFFF;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto;border-right:1px solid var(--border)}
 .sidebar-top{padding:0 0 14px;border-bottom:1px solid rgba(103,30,119,.15)}
-.logo-wrap{width:100%;background:#FFFFFF;display:flex;align-items:center;justify-content:center;padding:14px 18px}
-.logo-wrap img{width:100%;max-width:192px;height:auto;display:block}
+.logo-wrap{width:100%;background:#FFFFFF;display:flex;align-items:center;justify-content:center;padding:24px 18px 10px}
 .brand-sub-line{font-size:9px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;text-align:center;padding:5px 0 0;font-family:var(--mono)}
 .filters{padding:14px 16px;display:flex;flex-direction:column;gap:11px;border-bottom:1px solid rgba(103,30,119,.15)}
 .f-block{display:flex;flex-direction:column;gap:5px}
@@ -503,7 +502,22 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:1
 <div class="sidebar-overlay" id="overlay"></div>
 <div class="sidebar" id="sidebar">
   <div class="sidebar-top">
-    <div class="logo-wrap"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAcgAAAA8CAYAAADt7P... (IMAGEN OMITIDA POR BREVEDAD - EN HTML FINAL USA SVG O EL BASE64 REAL DEL SCRIPT ORIGINAL)" alt="SPSKY Pilotos"></div>
+    <div class="logo-wrap">
+      <svg viewBox="0 0 500 120" xmlns="http://www.w3.org/2000/svg" style="width: 100%; height: auto; display: block;">
+        <!-- Ala Izquierda -->
+        <polygon points="10,15 130,15 120,40 25,40" fill="#671E77"/>
+        <polygon points="30,48 120,48 110,73 45,73" fill="#671E77"/>
+        <polygon points="50,81 110,81 100,106 65,106" fill="#5CF200"/>
+        <!-- Ala Derecha -->
+        <polygon points="370,15 490,15 475,40 380,40" fill="#671E77"/>
+        <polygon points="380,48 470,48 455,73 390,73" fill="#671E77"/>
+        <polygon points="390,81 450,81 435,106 400,106" fill="#5CF200"/>
+        <!-- Textos -->
+        <text x="250" y="38" font-family="'DM Sans', sans-serif" font-weight="bold" font-size="30" fill="#671E77" text-anchor="middle" letter-spacing="1">SINDICATO</text>
+        <text x="250" y="74" font-family="'DM Sans', sans-serif" font-weight="bold" font-size="38" fill="#671E77" text-anchor="middle" letter-spacing="1.5">PILOTOS</text>
+        <text x="250" y="108" font-family="'DM Sans', sans-serif" font-weight="bold" font-size="32" text-anchor="middle" letter-spacing="0.5"><tspan fill="#5CF200">SKY </tspan><tspan fill="#671E77">AIRLINE</tspan></text>
+      </svg>
+    </div>
     <div class="brand-sub-line">Digital Copilot</div>
   </div>
   <div class="filters">
