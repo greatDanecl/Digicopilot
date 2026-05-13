@@ -46,29 +46,39 @@ def parse_td(val):
 
 def detect_period_from_filename(fname):
     """Extrae YYYY-MM del nombre del archivo.
-    Soporta: efec_Feb_2026_SCL.xlsx, prog_Mar_2026_PMC.xlsx, y variantes.
+
+    Soporta:
+      202602_efec_SCL.xlsx     → 2026-02
+      efec_feb_2026_SCL.xlsx   → 2026-02
+      prog_mar_2026_PMC.xlsx   → 2026-03
+      2026-02_prog_SCL.xlsx    → 2026-02
     """
     fl = fname.lower()
-    # Pattern: cualquier mes en texto + año de 4 dígitos
-    month_names = r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|ene|abr|ago|dic)'
-    year_names  = r'(20\d{2})'
-    # mes antes que año: efec_feb_2026_SCL
-    m = re.search(month_names + r'[_\-\s]*' + year_names, fl)
+
+    # Formato AAAAMM pegado: 202602, 202510, etc.
+    m = re.search(r'(20\d{2})(0[1-9]|1[0-2])', fl)
     if m:
-        mon = m.group(1).capitalize()
-        yr  = m.group(2)
-        code = MONTH_MAP.get(mon, '00')
-        if code != '00': return yr + '-' + code
-    # año antes que mes: 2026_feb
-    m2 = re.search(year_names + r'[_\-\s]*' + month_names, fl)
+        return m.group(1) + '-' + m.group(2)
+
+    # Formato AAAA-MM o AAAA_MM
+    m2 = re.search(r'(20\d{2})[-_](0[1-9]|1[0-2])', fl)
     if m2:
-        mon = m2.group(2).capitalize()
-        yr  = m2.group(1)
-        code = MONTH_MAP.get(mon, '00')
-        if code != '00': return yr + '-' + code
-    # año + número de mes: 2026-02
-    m3 = re.search(r'(20\d{2})[-_](0[1-9]|1[0-2])', fl)
-    if m3: return m3.group(1) + '-' + m3.group(2)
+        return m2.group(1) + '-' + m2.group(2)
+
+    # Mes en texto + año: feb_2026, mar2026, etc.
+    month_re = r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|ene|abr|ago|dic)'
+    year_re  = r'(20\d{2})'
+    m3 = re.search(month_re + r'[_\-\s]*' + year_re, fl)
+    if m3:
+        code = MONTH_MAP.get(m3.group(1), '00')
+        if code != '00': return m3.group(2) + '-' + code
+
+    # Año + mes en texto: 2026_feb
+    m4 = re.search(year_re + r'[_\-\s]*' + month_re, fl)
+    if m4:
+        code = MONTH_MAP.get(m4.group(2), '00')
+        if code != '00': return m4.group(1) + '-' + code
+
     return None
 
 def detect_period_from_df(df):
@@ -96,20 +106,22 @@ def detect_period_from_df(df):
 
 def detect_role(fname, sheet_name):
     """Detecta si el archivo es rol programado o efectuado.
-    Convención: efec_MMM_AAAA_BASE.xlsx / prog_MMM_AAAA_BASE.xlsx
+
+    Soporta:
+      202602_efec_SCL.xlsx   → actual
+      202602_prog_SCL.xlsx   → programmed
+      efec_feb_2026_SCL.xlsx → actual
+      prog_mar_2026_PMC.xlsx → programmed
     """
     fl, sl = fname.lower(), sheet_name.lower()
-    # Convención principal: empieza con efec o prog
-    if fl.startswith('efec'):  return 'actual'
-    if fl.startswith('prog'):  return 'programmed'
+    # Busca 'efec' o 'prog' en cualquier posición del nombre
+    if 'efec' in fl: return 'actual'
+    if 'prog' in fl: return 'programmed'
     # Variantes largas
-    if fl.startswith('efectuado'):  return 'actual'
-    if fl.startswith('programado'): return 'programmed'
-    # Fallbacks por contenido del nombre
-    if any(w in fl for w in ['horas','actual','efect','real','flown']): return 'actual'
-    if any(w in fl for w in ['plan','sched','mando','master']):         return 'programmed'
+    if 'efectuado' in fl or 'actual' in fl or 'flown' in fl: return 'actual'
+    if 'programado' in fl or 'plan' in fl or 'sched' in fl:  return 'programmed'
     # Fallback por nombre de hoja
-    if any(w in sl for w in ['hora','actual','efect']): return 'actual'
+    if any(w in sl for w in ['hora', 'actual', 'efect']): return 'actual'
     return 'programmed'
 
 def classify_day(col_vals):
@@ -242,9 +254,10 @@ def parse_sheet(df, period, role):
             lname   = str(df.iloc[i+2, 1]).strip() if i+2 < len(df) else ''
             rut_pos = str(df.iloc[i+3, 1]).strip() if i+3 < len(df) else ''
             base    = str(df.iloc[i+4, 1]).strip() if i+4 < len(df) else ''
-            cred_h  = parse_td(df.iloc[i+5, 1] if i+5 < len(df) else None)
-            blk_h   = parse_td(df.iloc[i+6, 1] if i+6 < len(df) else None)
-            duty_h  = parse_td(df.iloc[i+7, 1] if i+7 < len(df) else None)
+            # In ABCD format: col0=label(F/G/H), col1=field name, col2=value
+            cred_h  = parse_td(df.iloc[i+5, 2] if i+5 < len(df) else None)
+            blk_h   = parse_td(df.iloc[i+6, 2] if i+6 < len(df) else None)
+            duty_h  = parse_td(df.iloc[i+7, 2] if i+7 < len(df) else None)
             sched   = [str(v).strip() for v in df.iloc[i, 2:].tolist()]
             pilot_row = i
             i += 8
