@@ -46,18 +46,10 @@ def parse_td(val):
 
 def detect_period_from_filename(fname):
     """Extrae YYYY-MM del nombre del archivo.
-    Soporta:
-      - Nuevo formato: 202602_efec_SCL.xlsx, 202602_prog_PMC.xlsx
-      - Formato anterior: efec_Feb_2026_SCL.xlsx, prog_Mar_2026_PMC.xlsx y variantes.
+    Soporta: efec_Feb_2026_SCL.xlsx, prog_Mar_2026_PMC.xlsx, y variantes.
     """
     fl = fname.lower()
-
-    # Nuevo formato primario: YYYYMM_efec/prog_BBB  o  YYYYMM_BBB
-    m_new = re.match(r'^(20\d{2})(0[1-9]|1[0-2])_', fl)
-    if m_new:
-        return m_new.group(1) + '-' + m_new.group(2)
-
-    # Pattern legado: cualquier mes en texto + año de 4 dígitos
+    # Pattern: cualquier mes en texto + año de 4 dígitos
     month_names = r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|ene|abr|ago|dic)'
     year_names  = r'(20\d{2})'
     # mes antes que año: efec_feb_2026_SCL
@@ -77,27 +69,6 @@ def detect_period_from_filename(fname):
     # año + número de mes: 2026-02
     m3 = re.search(r'(20\d{2})[-_](0[1-9]|1[0-2])', fl)
     if m3: return m3.group(1) + '-' + m3.group(2)
-    return None
-
-def detect_base_from_filename(fname):
-    """Extrae el código de base IATA del nombre del archivo.
-    Soporta:
-      - Nuevo formato: 202602_efec_SCL.xlsx  -> 'SCL'
-      - Formato anterior: efec_Feb_2026_SCL.xlsx  -> 'SCL'
-    Retorna None si no se puede determinar.
-    """
-    fl = fname.lower()
-    # Nuevo formato: YYYYMM_efec_BBB o YYYYMM_prog_BBB
-    m = re.match(r'^20\d{4}_(efec|prog)_([a-z]{2,4})\b', fl)
-    if m:
-        return m.group(2).upper()
-    # Formato anterior: cualquier_cosa_BBB al final (antes de .xlsx)
-    m2 = re.search(r'[_\-]([a-z]{2,4})(?:\.xlsx?)?$', fl)
-    if m2:
-        candidate = m2.group(1).upper()
-        # Excluir palabras comunes que no son bases
-        if candidate not in ('XLSX', 'XLS', 'EFEC', 'PROG', 'EFECTUADO', 'PROGRAMADO'):
-            return candidate
     return None
 
 def detect_period_from_df(df):
@@ -125,18 +96,10 @@ def detect_period_from_df(df):
 
 def detect_role(fname, sheet_name):
     """Detecta si el archivo es rol programado o efectuado.
-    Soporta:
-      - Nuevo formato: 202602_efec_SCL.xlsx / 202602_prog_SCL.xlsx
-      - Formato anterior: efec_MMM_AAAA_BASE.xlsx / prog_MMM_AAAA_BASE.xlsx
+    Convención: efec_MMM_AAAA_BASE.xlsx / prog_MMM_AAAA_BASE.xlsx
     """
     fl, sl = fname.lower(), sheet_name.lower()
-
-    # Nuevo formato: YYYYMM_efec_ o YYYYMM_prog_
-    m_new = re.match(r'^20\d{4}_(efec|prog)_', fl)
-    if m_new:
-        return 'actual' if m_new.group(1) == 'efec' else 'programmed'
-
-    # Convención legada: empieza con efec o prog
+    # Convención principal: empieza con efec o prog
     if fl.startswith('efec'):  return 'actual'
     if fl.startswith('prog'):  return 'programmed'
     # Variantes largas
@@ -149,45 +112,94 @@ def detect_role(fname, sheet_name):
     if any(w in sl for w in ['hora','actual','efect']): return 'actual'
     return 'programmed'
 
-def is_turno_day(val):
-    """Dia con turno operacional: tiene hora de presentacion o codigo de standby."""
-    s = str(val).strip()
-    if re.match(r'^(\d{2}:\d{2}\s*->|->?\s*\d{2}:\d{2})', s): return True
-    if any(t in s.upper() for t in ['TURNO','ACTIVO','ELEAR']): return True
-    return False
+def classify_day(col_vals):
+    """Clasifica un dia dado los valores de todas las filas de esa columna.
+    
+    Retorna uno de:
+      TURNO    - dia con turno de reserva (TURNOx)
+      VUELO    - dia con vuelo(s) operados
+      HOTEL    - pernocte fuera de base
+      SIM      - simulador
+      ELEAR    - e-learning
+      DH       - deadhead (pasajero en avion de la compania)
+      ACT      - activacion desde reserva sin turno asignado
+      OFNA2    - trabajo en oficina
+      CEMAE    - examen medico CMAE
+      LQUIN    - libre quincena
+      SINDI    - dia sindical
+      FVUEL    - fuera de vuelo (pre/post natal u otro)
+      VACAC    - vacaciones
+      LIBRE    - dia libre en base
+      FINDE    - dias libres ley (art 152 ter K)
+      BDAY     - cumpleanos
+      BLANCO   - sin asignacion
+    """
+    clean = [v for v in col_vals if v not in ['nan', 'NaT', '']]
+    if not clean:
+        return 'BLANCO'
+    joined = ' '.join(clean).upper()
 
-def is_flight_number(val):
-    """Numero de vuelo en fila secundaria (2-4 digitos)."""
-    s = str(val).strip()
-    return bool(re.match(r'^\d{2,4}$', s))
+    # TURNO: debe ser explicitamente TURNOx (numero)
+    if re.search(r'\bTURNO\d+', joined):
+        return 'TURNO'
+    # Vuelos: numeros puros de 2-4 digitos en cualquier fila
+    flights = [v for v in clean if re.match(r'^\d{2,4}$', v.strip())]
+    if flights:
+        return 'VUELO'
+    # Resto de codigos por prioridad
+    for code, label in [
+        ('HOTEL',  'HOTEL'),
+        ('SIM',    'SIM'),
+        ('ELEAR',  'ELEAR'),
+        ('DH',     'DH'),
+        ('ACT',    'ACT'),
+        ('OFNA2',  'OFNA2'),
+        ('CEMAE',  'CEMAE'),
+        ('LQUIN',  'LQUIN'),
+        ('SINDI',  'SINDI'),
+        ('FVUEL',  'FVUEL'),
+        ('VACAC',  'VACAC'),
+        ('BDAY',   'BDAY'),
+        ('LIBRE',  'LIBRE'),
+        ('FINDE',  'FINDE'),
+    ]:
+        if code in joined:
+            return label
+    # Solo horas sin codigo reconocido = continuacion de vuelo del dia anterior
+    return 'CONT'
 
-def count_turnos(df, pilot_row, abcd):
-    """Cuenta dias con turno programado para un piloto."""
+def get_day_cols(df, pilot_row, col, n_rows=4):
+    """Devuelve los valores de n_rows filas para una columna de un dia."""
     col_start = 2
-    n_cols = df.shape[1] - col_start
-    turnos = 0
-    sched_row = pilot_row
-    r1_row    = pilot_row + 1
-    for col in range(n_cols):
-        s0 = str(df.iloc[sched_row, col + col_start]).strip() if sched_row < len(df) else ''
-        s1 = str(df.iloc[r1_row,    col + col_start]).strip() if r1_row    < len(df) else ''
-        if is_turno_day(s0) or is_turno_day(s1):
-            turnos += 1
-    return turnos
+    return [
+        str(df.iloc[pilot_row + k, col + col_start]).strip()
+        if pilot_row + k < len(df) else ''
+        for k in range(n_rows)
+    ]
 
-def count_vuelos(df, pilot_row, abcd):
-    """Cuenta dias con vuelos efectuados (tienen numero de vuelo en filas secundarias)."""
-    col_start = 2
-    n_cols = df.shape[1] - col_start
-    vuelos = 0
-    r1_row = pilot_row + 1
-    r2_row = pilot_row + 2
+def count_schedule(df, pilot_row, role):
+    """Cuenta turnos, vuelos, dias blancos y dias por tipo para un piloto.
+    
+    Para rol 'programmed': cuenta TURNOs y VUELOs programados.
+    Para rol 'actual':     cuenta VUELOs efectuados y dias BLANCO.
+    """
+    n_cols = df.shape[1] - 2
+    counts = {
+        'turnos': 0, 'vuelos': 0, 'blancos': 0,
+        'hotel': 0, 'sim': 0, 'elear': 0, 'act': 0, 'dh': 0
+    }
     for col in range(n_cols):
-        s1 = str(df.iloc[r1_row, col + col_start]).strip() if r1_row < len(df) else ''
-        s2 = str(df.iloc[r2_row, col + col_start]).strip() if r2_row < len(df) else ''
-        if is_flight_number(s1) or is_flight_number(s2):
-            vuelos += 1
-    return vuelos
+        vals = get_day_cols(df, pilot_row, col)
+        tipo = classify_day(vals)
+        if tipo == 'TURNO':  counts['turnos'] += 1
+        elif tipo == 'VUELO': counts['vuelos'] += 1
+        elif tipo == 'BLANCO': counts['blancos'] += 1
+        elif tipo == 'HOTEL': counts['hotel'] += 1
+        elif tipo == 'SIM':   counts['sim'] += 1
+        elif tipo == 'ELEAR': counts['elear'] += 1
+        elif tipo == 'ACT':   counts['act'] += 1
+        elif tipo == 'DH':    counts['dh'] += 1
+    return counts
 
 def find_totals(df, pilot_row, max_look=16):
     """Busca dinámicamente Credits, Block hours, Duty hours desde pilot_row."""
@@ -215,9 +227,7 @@ def block_size(df, pilot_row, max_look=18):
             return k
     return 13  # fallback generoso
 
-def parse_sheet(df, period, role, base_override=None):
-    """Parsea una hoja Excel. Si base_override no es None, usa ese valor como base
-    en lugar del que aparece en el archivo."""
+def parse_sheet(df, period, role):
     pilots = []
     if len(df) < 10 or df.shape[1] < 2: return pilots
     r9   = str(df.iloc[9, 0]).strip()
@@ -260,9 +270,6 @@ def parse_sheet(df, period, role, base_override=None):
         name = (fname_p + ' ' + lname).strip()
         if not name or re.search(r'\b(TEST|PRUEBA)\b', name.upper()): continue
 
-        # Si hay base_override del nombre de archivo, usarla; si no, usar la del Excel
-        effective_base = base_override if base_override else base
-
         # Position grouping
         # C15M = Capitán (habilitación especial A320 family)
         # FON  = Primer Oficial (igual que FO)
@@ -278,22 +285,29 @@ def parse_sheet(df, period, role, base_override=None):
         total_days = len([s for s in sched if s not in ['nan','NaT','','None']])
         excl = ((vac + med) / max(total_days, 1)) > 0.35 or blk_h < 5
 
-        # Count turnos (programmed) or vuelos (actual)
+        # Count turnos, vuelos, blancos using correct classification
+        sched_counts = count_schedule(df, pilot_row, role)
         if role == 'programmed':
-            turnos = count_turnos(df, pilot_row, abcd)
+            turnos = sched_counts['turnos']
+            vuelos_prog = sched_counts['vuelos']
             vuelos = None
+            blancos = None
         else:
             turnos = None
-            vuelos = count_vuelos(df, pilot_row, abcd)
+            vuelos_prog = None
+            vuelos  = sched_counts['vuelos']
+            blancos = sched_counts['blancos']
 
         pilots.append({
             'period': period, 'role': role, 'code': code, 'name': name,
-            'pos': pos, 'pos_group': pg, 'base': effective_base,
+            'pos': pos, 'pos_group': pg, 'base': base,
             'block_h': blk_h, 'duty_h': duty_h, 'credits_h': cred_h,
             'libre_days': lib, 'vac_days': vac, 'med_days': med, 'sim_days': sim,
             'exclude_from_avg': excl,
             'turnos': turnos,
+            'vuelos_prog': vuelos_prog,
             'vuelos': vuelos,
+            'blancos': blancos,
         })
     return pilots
 
@@ -324,10 +338,6 @@ def build_dataset():
     for fpath in xlsx_files:
         fname = os.path.basename(fpath)
         cfg_entry = file_map.get(fname)
-
-        # Extraer base del nombre de archivo (nuevo formato tiene precedencia)
-        base_from_fname = detect_base_from_filename(fname)
-
         try:
             xl = pd.ExcelFile(fpath)
         except Exception as e:
@@ -358,11 +368,10 @@ def build_dataset():
                 else:
                     role = detect_role(fname, sheet_name)
 
-                recs = parse_sheet(df, period, role, base_override=base_from_fname)
+                recs = parse_sheet(df, period, role)
                 all_records.extend(recs)
                 lbl = PERIOD_LABELS_MAP.get(period, period)
-                base_str = (' [' + base_from_fname + ']') if base_from_fname else ''
-                print('  ok ' + fname + '/' + sheet_name + ': ' + lbl + ' ' + role + base_str + ' ' + str(len(recs)) + 'p')
+                print('  ok ' + fname + '/' + sheet_name + ': ' + lbl + ' ' + role + ' ' + str(len(recs)) + 'p')
             except Exception as e:
                 print('  x ' + fname + '/' + sheet_name + ': ' + str(e))
 
@@ -379,7 +388,8 @@ def build_dataset():
                 'exclude_from_avg': r['exclude_from_avg'],
                 'block_h_programmed': None, 'duty_h_programmed': None, 'credits_h_programmed': None,
                 'block_h_actual':     None, 'duty_h_actual':     None, 'credits_h_actual':     None,
-                'turnos_programados': None, 'vuelos_efectuados': None,
+                'turnos_programados': None, 'vuelos_programados': None,
+                'vuelos_efectuados':  None, 'dias_blancos':       None,
             }
         rk = r['role']
         for metric in ['block_h', 'duty_h', 'credits_h']:
@@ -389,15 +399,15 @@ def build_dataset():
             summary[key]['exclude_from_avg'] = True
         if rk == 'programmed' and r.get('turnos') is not None:
             summary[key]['turnos_programados'] = r['turnos']
+        if rk == 'programmed' and r.get('vuelos_prog') is not None:
+            summary[key]['vuelos_programados'] = r['vuelos_prog']
         if rk == 'actual' and r.get('vuelos') is not None:
             summary[key]['vuelos_efectuados'] = r['vuelos']
-        # Actualizar base si viene del nombre del archivo (más confiable)
-        if base_from_fname:
-            summary[key]['base'] = r['base']
+        if rk == 'actual' and r.get('blancos') is not None:
+            summary[key]['dias_blancos'] = r['blancos']
 
     records = list(summary.values())
     periods = sorted(set(r['period'] for r in records))
-    bases   = sorted(set(r['base'] for r in records if r['base']))
 
     names_by_grp = defaultdict(set)
     for r in records:
@@ -406,7 +416,6 @@ def build_dataset():
     print('\n' + '-'*50)
     print('Total registros: ' + str(len(records)))
     print('Periodos: ' + str([PERIOD_LABELS_MAP.get(p,p) for p in periods]))
-    print('Bases: ' + str(bases))
     for g, ns in sorted(names_by_grp.items()):
         print('  ' + g + ': ' + str(len(ns)) + ' pilotos')
 
@@ -584,32 +593,19 @@ def generate_html(records, periods):
         "document.getElementById('periodPill').textContent = Object.values(PERIOD_LABELS).join(' \u00b7 ');\n"
         "document.getElementById('periodsHint').textContent = 'Per\u00edodos: ' + Object.values(PERIOD_LABELS).join(' \u00b7 ');\n"
         '\n'
-        '// Populate base dropdown dynamically from data\n'
-        'const allBases = [...new Set(RAW.map(r => r.base).filter(Boolean))].sort();\n'
-        "const selBase = document.getElementById('selBase');\n"
-        "allBases.forEach(b => { const o = document.createElement('option'); o.value = o.textContent = b; selBase.appendChild(o); });\n"
-        '\n'
         'let blockChartInst = null, compareChartInst = null;\n'
         "const selGroup = document.getElementById('selGroup');\n"
         "const selPilot = document.getElementById('selPilot');\n"
         '\n'
-        'function getActiveBase() { return selBase.value || null; }\n'
-        '\n'
-        'function refreshPilotList() {\n'
+        "selGroup.addEventListener('change', () => {\n"
         '  const g = selGroup.value;\n'
-        '  const base = document.getElementById("selBase").value || null;\n'
-        '  if (!g) return;\n'
-        '  const filtered = RAW.filter(r => r.pos_group === g && (base === null || r.base === base));\n'
-        '  const names = [...new Set(filtered.map(r => r.name))].sort((a,b) => a.localeCompare(b, "es"));\n'
-        "  selPilot.innerHTML = '<option value=\"\">\\u2014 Seleccionar tripulante \\u2014</option>';\n"
+        '  const names = [...new Set(RAW.filter(r => r.pos_group === g).map(r => r.name))].sort((a,b) => a.localeCompare(b, "es"));\n'
+        "  selPilot.innerHTML = '<option value=\"\">— Seleccionar tripulante —</option>';\n"
         '  names.forEach(n => { const o = document.createElement("option"); o.value = o.textContent = n; selPilot.appendChild(o); });\n'
-        '  selPilot.disabled = names.length === 0;\n'
+        '  selPilot.disabled = false;\n'
         "  document.getElementById('placeholder').style.display = 'flex';\n"
         "  document.getElementById('dashboard').style.display = 'none';\n"
-        '}\n'
-        '\n'
-        "selBase.addEventListener('change', () => { refreshPilotList(); });\n"
-        "selGroup.addEventListener('change', () => { refreshPilotList(); });\n"
+        '});\n'
         "selPilot.addEventListener('change', () => { if (selPilot.value) render(selPilot.value, selGroup.value); });\n"
         '\n'
         'function fmt(v, d) { d = d === undefined ? 1 : d; if (v == null || +v === 0) return "\u2014"; return (+v).toFixed(d); }\n'
@@ -650,24 +646,38 @@ def generate_html(records, periods):
         '  const accProg = pr.reduce((s,r)  => s + (r.block_h_programmed || 0), 0);\n'
         '  const accAct  = pr.reduce((s,r)  => s + (r.block_h_actual    || 0), 0);\n'
         '  const pva = accProg > 0 ? (accAct - accProg)/accProg*100 : 0;\n'
-        '  const turnos = latest ? (latest.turnos_programados || null) : null;\n'
-        '  const vuelos = latest ? (latest.vuelos_efectuados  || null) : null;\n'
-        '  const convPct = (turnos && vuelos) ? vuelos/turnos*100 : null;\n'
+        '  const turnos  = latest ? (latest.turnos_programados || null) : null;\n'
+        '  const vuelos  = latest ? (latest.vuelos_efectuados  || null) : null;\n'
+        '  const vProg   = latest ? (latest.vuelos_programados || null) : null;\n'
+        '  const blancos = latest ? (latest.dias_blancos        || null) : null;\n'
+        '  // Conversion: turnos efectivamente volados = vuelos en el rol efectuado / turnos en el programado\n'
+        '  const convPct = (turnos != null && vuelos != null && turnos > 0) ? vuelos/turnos*100 : null;\n'
         '\n'
         "  document.getElementById('kpiRow').innerHTML =\n"
-        '    \'<div class="kpi k-clay"><div class="kpi-label">Bloque \u00b7 \' + (PERIOD_LABELS[lp]||lp) + \'</div><div class="kpi-val">\' + fmt(mb) + \'<span class="kpi-unit">h</span></div><div class="kpi-footer"><span class="kpi-vs">Prom.: <b>\' + fmt(ab) + \'h</b></span><span class="delta \' + dc(bd) + \'">\' + ds(bd) + \'</span></div></div>\' +\n'
-        '    \'<div class="kpi k-sand"><div class="kpi-label">Deber \u00b7 \' + (PERIOD_LABELS[lp]||lp) + \'</div><div class="kpi-val">\' + fmt(md) + \'<span class="kpi-unit">h</span></div><div class="kpi-footer"><span class="kpi-vs">Prom.: <b>\' + fmt(ad) + \'h</b></span><span class="delta \' + dc(dd) + \'">\' + ds(dd) + \'</span></div></div>\' +\n'
+        '    \'<div class="kpi k-clay"><div class="kpi-label">Block hours \u00b7 \' + (PERIOD_LABELS[lp]||lp) + \'</div><div class="kpi-val">\' + fmt(mb) + \'<span class="kpi-unit">h</span></div><div class="kpi-footer"><span class="kpi-vs">Prom.: <b>\' + fmt(ab) + \'h</b></span><span class="delta \' + dc(bd) + \'">\' + ds(bd) + \'</span></div></div>\' +\n'
+        '    \'<div class="kpi k-sand"><div class="kpi-label">Duty hours \u00b7 \' + (PERIOD_LABELS[lp]||lp) + \'</div><div class="kpi-val">\' + fmt(md) + \'<span class="kpi-unit">h</span></div><div class="kpi-footer"><span class="kpi-vs">Prom.: <b>\' + fmt(ad) + \'h</b></span><span class="delta \' + dc(dd) + \'">\' + ds(dd) + \'</span></div></div>\' +\n'
         '    \'<div class="kpi k-sage"><div class="kpi-label">D\u00edas libres \u00b7 \' + (PERIOD_LABELS[lp]||lp) + \'</div><div class="kpi-val">\' + ml + \'<span class="kpi-unit">d</span></div><div class="kpi-footer"><span class="kpi-vs">Prom.: <b>\' + fmt(al,0) + \'d</b></span><span class="delta \' + dc(ml-al) + \'">\' + (ml-al>=0?"+":"") + (ml-al).toFixed(0) + \'d</span></div></div>\' +\n'
-        '    \'<div class="kpi k-dusk"><div class="kpi-label">Turnos prog. \u00b7 \' + (PERIOD_LABELS[lp]||lp) + \'</div><div class="kpi-val">\' + (turnos !== null ? turnos : "\\u2014") + \'<span class="kpi-unit">\' + (vuelos !== null ? " / "+vuelos+" ef." : "") + \'</span></div><div class="kpi-footer"><span class="kpi-vs">\' + (convPct !== null ? "Conversi\\u00f3n:" : "Sin datos efectuados") + \'</span>\' + (convPct !== null ? \'<span class="delta \' + (convPct>=80?"d-up":convPct>=60?"d-warn":"d-down") + \'">\' + convPct.toFixed(0) + \'%</span>\' : "") + \'</div></div>\' +\n'
-        '    \'<div class="kpi k-rust"><div class="kpi-label">Bloque acumulado</div><div class="kpi-val">\' + fmt(accB,0) + \'<span class="kpi-unit">h</span></div><div class="kpi-footer"><span class="kpi-vs">\' + actP.length + \' meses activos</span><span class="delta d-neu">/\' + PERIODS.length + \'m</span></div></div>\' +\n'
-        '    \'<div class="kpi k-sand"><div class="kpi-label">Prog. vs Efectuado</div><div class="kpi-val">\' + fmt(Math.abs(pva),1) + \'<span class="kpi-unit">%</span></div><div class="kpi-footer"><span class="kpi-vs">P:<b>\' + fmt(accProg,0) + \'h</b> E:<b>\' + fmt(accAct,0) + \'h</b></span><span class="delta \' + (pva>=0?"d-up":"d-down") + \'">\' + (pva>=0?"\\u25b2":"\\u25bc") + \' ef.</span></div></div>\';\n'
+        '    \'<div class="kpi k-dusk"><div class="kpi-label">Turnos prog. \u00b7 \' + (PERIOD_LABELS[lp]||lp) + \'</div>\' +\n'
+        '    \'<div class="kpi-val">\' + (turnos !== null ? turnos : "\\u2014") + \'<span class="kpi-unit">\' + (vuelos !== null ? " / "+vuelos+" ef." : "") + \'</span></div>\' +\n'
+        '    \'<div class="kpi-footer"><span class="kpi-vs">\' + (vProg !== null ? vProg+" vuelos prog." : "Sin datos prog.") + \'</span>\' +\n'
+        '    (convPct !== null ? \'<span class="delta \' + (convPct>=80?"d-up":convPct>=60?"d-warn":"d-down") + \'">\' + convPct.toFixed(0) + \'% conv.</span>\' : "") + \'</div></div>\' +\n'
+        '    \'<div class="kpi k-rust"><div class="kpi-label">Block acum.</div><div class="kpi-val">\' + fmt(accB,0) + \'<span class="kpi-unit">h</span></div><div class="kpi-footer"><span class="kpi-vs">\' + actP.length + \' meses activos</span><span class="delta d-neu">/\' + PERIODS.length + \'m</span></div></div>\' +\n'
+        '    \'<div class="kpi k-sand"><div class="kpi-label">D\u00edas blancos \u00b7 \' + (PERIOD_LABELS[lp]||lp) + \'</div>\' +\n'
+        '    \'<div class="kpi-val">\' + (blancos !== null ? blancos : "\\u2014") + \'<span class="kpi-unit">d</span></div>\' +\n'
+        '    \'<div class="kpi-footer"><span class="kpi-vs">Das sin asignaci\\u00f3n (rol ef.)</span><span class="delta \' + (blancos > 5 ? "d-warn" : "d-up") + \'">\' + (blancos !== null ? (blancos > 5 ? "\\u26a0 revisar" : "\\u2713 ok") : "\\u2014") + \'</span></div></div>\';\n'
         '\n'
         '  // Line chart\n'
+        '  // pData: muestra efectuado si existe, si no programado (meses futuros/sin efectuado aún)\n'
+        '  // gData: promedio del cargo completo, pilotos activos sin ausencias prolongadas\n'
+        '  //        usa efectuado si existe, si no programado — mismo criterio que pData\n'
         '  const excl  = pr.filter(r => r.exclude_from_avg).map(r => r.period);\n'
         '  function bestBlock(r) { return (r.block_h_actual && r.block_h_actual > 0) ? r.block_h_actual : (r.block_h_programmed || 0); }\n'
         '  function isProgrammedOnly(r) { return !(r.block_h_actual && r.block_h_actual > 0) && (r.block_h_programmed && r.block_h_programmed > 0); }\n'
         '  const pData = PERIODS.map(p => { const r = pr.find(x => x.period===p); return r ? bestBlock(r) : null; });\n'
+        '  // progOnlyPeriods: períodos donde el piloto solo tiene programado (sin efectuado)\n'
         '  const progOnlyIdx = PERIODS.map((p,i) => { const r = pr.find(x => x.period===p); return (r && isProgrammedOnly(r)) ? i : -1; }).filter(i => i>=0);\n'
+        '  // gData: promedio del segmento comparable (mismo cargo, sin ausencias)\n'
+        '  // Excluye al piloto seleccionado del cálculo del promedio\n'
         '  const gData = PERIODS.map(p => {\n'
         '    const peers = gr.filter(r => r.name !== pilotName && !r.exclude_from_avg && bestBlock(r) > 0);\n'
         '    const inPeriod = peers.filter(r => r.period === p);\n'
@@ -742,29 +752,31 @@ def generate_html(records, periods):
         '  });\n'
         '\n'
         '  // Comparison table\n'
-        '  let tbl = \'<table class="comp-table"><thead><tr><th>Per\\u00edodo</th><th>Programado</th><th>Efectuado</th><th>Turnos prog.</th><th>Vuelos ef.</th><th>Conversi\\u00f3n</th><th>\\u0394 Bloque</th></tr></thead><tbody>\';\n'
+        '  let tbl = \'<table class="comp-table"><thead><tr><th>Per\\u00edodo</th><th>Block prog.</th><th>Block ef.</th><th>\\u0394 Block</th><th>Turnos</th><th>Vuelos prog.</th><th>Vuelos ef.</th><th>Conv.</th><th>Blancos</th></tr></thead><tbody>\';\n'
         '  PERIODS.forEach(p => {\n'
         '    const r = pr.find(x => x.period===p); if(!r) return;\n'
         '    const pg=r.block_h_programmed||0, ac=r.block_h_actual||0, d=ac-pg;\n'
-        '    const tp=r.turnos_programados, ve=r.vuelos_efectuados;\n'
-        '    const cp = (tp && ve) ? ve/tp*100 : null;\n'
+        '    const tp=r.turnos_programados, vp=r.vuelos_programados;\n'
+        '    const ve=r.vuelos_efectuados,  bl=r.dias_blancos;\n'
+        '    const cp = (tp != null && ve != null && tp > 0) ? ve/tp*100 : null;\n'
         '    const ex = r.exclude_from_avg ? \'<span style="color:var(--rust);font-size:9px"> \\u2731</span>\' : "";\n'
         '    const cpCell = cp !== null\n'
         '      ? \'<span style="font-family:var(--mono);font-size:11px;color:\' + (cp>=80?"var(--sage)":cp>=60?"var(--rust)":"var(--warm-red)") + \'">\' + cp.toFixed(0) + \'%</span>\'\n'
         '      : \'<span style="color:var(--dim)">\\u2014</span>\';\n'
         '    const dstr = pg > 0 ? ((d>=0?"+":"")+d.toFixed(1)+"h") : "\\u2014";\n'
-        '    const barW = tp ? Math.min(100, (ve||0)/tp*100) : 0;\n'
-        '    const barHtml = tp ? (\'<div class="turnos-bar"><div class="tbar-track" style="width:60px"><div class="tbar-prog" style="width:100%"></div><div class="tbar-act" style="width:\'+barW+\'%"></div></div><span class="tbar-label">\'+((ve||0))+\'/\'+tp+\'</span></div>\') : \'<span style="color:var(--dim)">\\u2014</span>\';\n'
+        '    const blCell = bl !== null ? (bl > 5 ? \'<span style="color:var(--warm-red)">\'+bl+\'</span>\' : bl) : "\\u2014";\n'
         '    tbl += \'<tr><td style="font-family:var(--mono);font-size:11px;color:var(--text2)">\' + (PERIOD_LABELS[p]||p) + ex + \'</td>\'\n'
         '         + \'<td style="font-family:var(--mono)">\' + (pg>0?pg.toFixed(1)+"h":"\\u2014") + \'</td>\'\n'
         '         + \'<td style="font-family:var(--mono)">\' + (ac>0?ac.toFixed(1)+"h":"\\u2014") + \'</td>\'\n'
-        '         + \'<td>\' + (tp !== null ? tp : "\\u2014") + \'</td>\'\n'
-        '         + \'<td>\' + (ve !== null ? ve : "\\u2014") + \'</td>\'\n'
-        '         + \'<td>\' + cpCell + \'</td>\'\n'
         '         + \'<td style="font-family:var(--mono);color:\' + (d>=0?"var(--sage)":"var(--warm-red)") + \'">\' + dstr + \'</td>\'\n'
+        '         + \'<td style="font-family:var(--mono)">\' + (tp !== null ? tp : "\\u2014") + \'</td>\'\n'
+        '         + \'<td style="font-family:var(--mono)">\' + (vp !== null ? vp : "\\u2014") + \'</td>\'\n'
+        '         + \'<td style="font-family:var(--mono)">\' + (ve !== null ? ve : "\\u2014") + \'</td>\'\n'
+        '         + \'<td>\' + cpCell + \'</td>\'\n'
+        '         + \'<td style="font-family:var(--mono)">\' + blCell + \'</td>\'\n'
         '         + \'</tr>\';\n'
         '  });\n'
-        '  if (excl.length) tbl += \'<tr><td colspan="7" style="font-size:9px;color:var(--muted);font-family:var(--mono);padding:6px 10px">\\u2731 Excluido del promedio comparativo</td></tr>\';\n'
+        '  if (excl.length) tbl += \'<tr><td colspan="9" style="font-size:9px;color:var(--muted);font-family:var(--mono);padding:6px 10px">\\u2731 Excluido del promedio comparativo</td></tr>\';\n'
         '  tbl += "</tbody></table>";\n'
         "  document.getElementById('compTableWrap').innerHTML = tbl;\n"
         '\n'
@@ -820,7 +832,7 @@ def generate_html(records, periods):
         '<body>\n'
         '<div class="shell">\n'
         '<!-- Hamburger mobile button -->\n'
-        '<button class="hamburger" id="menuBtn" aria-label="Abrir men\u00fa"><span></span><span></span><span></span></button>\n'
+        '<button class="hamburger" id="menuBtn" aria-label="Abrir menú"><span></span><span></span><span></span></button>\n'
         '<div class="sidebar-overlay" id="overlay"></div>\n'
         '<div class="sidebar" id="sidebar">\n'
         '  <div class="sidebar-top">\n'
@@ -831,11 +843,6 @@ def generate_html(records, periods):
         '    <div class="brand-sub" style="margin-left:38px">Digital Copilot</div>\n'
         '  </div>\n'
         '  <div class="filters">\n'
-        '    <div class="f-block"><div class="f-label">Base</div>\n'
-        '      <select class="f-select" id="selBase">\n'
-        '        <option value="">Todas las bases</option>\n'
-        '      </select>\n'
-        '    </div>\n'
         '    <div class="f-block"><div class="f-label">Cargo</div>\n'
         '      <select class="f-select" id="selGroup">\n'
         '        <option value="">\u2014 Seleccionar cargo \u2014</option>\n'
@@ -878,7 +885,7 @@ def generate_html(records, periods):
         '    <div id="placeholder" style="display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;gap:14px;color:var(--dim);padding:60px 0;">\n'
         '      <svg width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.2" viewBox="0 0 24 24" style="stroke:var(--border2)"><path d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>\n'
         '      <div style="font-family:var(--display);font-size:18px;color:var(--sand-400)">SDC \u00b7 SPSKY Digital Copilot</div>\n'
-        '      <div style="font-size:12px;text-align:center;max-width:300px;line-height:1.7;color:var(--muted)">Seleccione una base, cargo y tripulante para visualizar sus indicadores de productividad.</div>\n'
+        '      <div style="font-size:12px;text-align:center;max-width:300px;line-height:1.7;color:var(--muted)">Seleccione un cargo y un tripulante para visualizar sus indicadores de productividad.</div>\n'
         '      <div style="font-size:10px;font-family:var(--mono);color:var(--dim);margin-top:4px" id="periodsHint"></div>\n'
         '    </div>\n'
         '    <div id="dashboard" style="display:none;flex-direction:column;gap:16px;">\n'
