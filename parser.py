@@ -597,9 +597,9 @@ def generate_html(records, periods):
         '\n'
         'function refreshPilotList() {\n'
         '  const g = selGroup.value;\n'
-        '  const base = getActiveBase();\n'
+        '  const base = document.getElementById("selBase").value || null;\n'
         '  if (!g) return;\n'
-        '  const filtered = RAW.filter(r => r.pos_group === g && (!base || r.base === base));\n'
+        '  const filtered = RAW.filter(r => r.pos_group === g && (base === null || r.base === base));\n'
         '  const names = [...new Set(filtered.map(r => r.name))].sort((a,b) => a.localeCompare(b, "es"));\n'
         "  selPilot.innerHTML = '<option value=\"\">\\u2014 Seleccionar tripulante \\u2014</option>';\n"
         '  names.forEach(n => { const o = document.createElement("option"); o.value = o.textContent = n; selPilot.appendChild(o); });\n'
