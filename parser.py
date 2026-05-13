@@ -46,10 +46,18 @@ def parse_td(val):
 
 def detect_period_from_filename(fname):
     """Extrae YYYY-MM del nombre del archivo.
-    Soporta: efec_Feb_2026_SCL.xlsx, prog_Mar_2026_PMC.xlsx, y variantes.
+    Soporta:
+      - Nuevo formato: 202602_efec_SCL.xlsx, 202602_prog_PMC.xlsx
+      - Formato anterior: efec_Feb_2026_SCL.xlsx, prog_Mar_2026_PMC.xlsx y variantes.
     """
     fl = fname.lower()
-    # Pattern: cualquier mes en texto + año de 4 dígitos
+
+    # Nuevo formato primario: YYYYMM_efec/prog_BBB  o  YYYYMM_BBB
+    m_new = re.match(r'^(20\d{2})(0[1-9]|1[0-2])_', fl)
+    if m_new:
+        return m_new.group(1) + '-' + m_new.group(2)
+
+    # Pattern legado: cualquier mes en texto + año de 4 dígitos
     month_names = r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|ene|abr|ago|dic)'
     year_names  = r'(20\d{2})'
     # mes antes que año: efec_feb_2026_SCL
@@ -69,6 +77,27 @@ def detect_period_from_filename(fname):
     # año + número de mes: 2026-02
     m3 = re.search(r'(20\d{2})[-_](0[1-9]|1[0-2])', fl)
     if m3: return m3.group(1) + '-' + m3.group(2)
+    return None
+
+def detect_base_from_filename(fname):
+    """Extrae el código de base IATA del nombre del archivo.
+    Soporta:
+      - Nuevo formato: 202602_efec_SCL.xlsx  -> 'SCL'
+      - Formato anterior: efec_Feb_2026_SCL.xlsx  -> 'SCL'
+    Retorna None si no se puede determinar.
+    """
+    fl = fname.lower()
+    # Nuevo formato: YYYYMM_efec_BBB o YYYYMM_prog_BBB
+    m = re.match(r'^20\d{4}_(efec|prog)_([a-z]{2,4})\b', fl)
+    if m:
+        return m.group(2).upper()
+    # Formato anterior: cualquier_cosa_BBB al final (antes de .xlsx)
+    m2 = re.search(r'[_\-]([a-z]{2,4})(?:\.xlsx?)?$', fl)
+    if m2:
+        candidate = m2.group(1).upper()
+        # Excluir palabras comunes que no son bases
+        if candidate not in ('XLSX', 'XLS', 'EFEC', 'PROG', 'EFECTUADO', 'PROGRAMADO'):
+            return candidate
     return None
 
 def detect_period_from_df(df):
@@ -96,10 +125,18 @@ def detect_period_from_df(df):
 
 def detect_role(fname, sheet_name):
     """Detecta si el archivo es rol programado o efectuado.
-    Convención: efec_MMM_AAAA_BASE.xlsx / prog_MMM_AAAA_BASE.xlsx
+    Soporta:
+      - Nuevo formato: 202602_efec_SCL.xlsx / 202602_prog_SCL.xlsx
+      - Formato anterior: efec_MMM_AAAA_BASE.xlsx / prog_MMM_AAAA_BASE.xlsx
     """
     fl, sl = fname.lower(), sheet_name.lower()
-    # Convención principal: empieza con efec o prog
+
+    # Nuevo formato: YYYYMM_efec_ o YYYYMM_prog_
+    m_new = re.match(r'^20\d{4}_(efec|prog)_', fl)
+    if m_new:
+        return 'actual' if m_new.group(1) == 'efec' else 'programmed'
+
+    # Convención legada: empieza con efec o prog
     if fl.startswith('efec'):  return 'actual'
     if fl.startswith('prog'):  return 'programmed'
     # Variantes largas
@@ -178,7 +215,9 @@ def block_size(df, pilot_row, max_look=18):
             return k
     return 13  # fallback generoso
 
-def parse_sheet(df, period, role):
+def parse_sheet(df, period, role, base_override=None):
+    """Parsea una hoja Excel. Si base_override no es None, usa ese valor como base
+    en lugar del que aparece en el archivo."""
     pilots = []
     if len(df) < 10 or df.shape[1] < 2: return pilots
     r9   = str(df.iloc[9, 0]).strip()
@@ -221,6 +260,9 @@ def parse_sheet(df, period, role):
         name = (fname_p + ' ' + lname).strip()
         if not name or re.search(r'\b(TEST|PRUEBA)\b', name.upper()): continue
 
+        # Si hay base_override del nombre de archivo, usarla; si no, usar la del Excel
+        effective_base = base_override if base_override else base
+
         # Position grouping
         # C15M = Capitán (habilitación especial A320 family)
         # FON  = Primer Oficial (igual que FO)
@@ -246,7 +288,7 @@ def parse_sheet(df, period, role):
 
         pilots.append({
             'period': period, 'role': role, 'code': code, 'name': name,
-            'pos': pos, 'pos_group': pg, 'base': base,
+            'pos': pos, 'pos_group': pg, 'base': effective_base,
             'block_h': blk_h, 'duty_h': duty_h, 'credits_h': cred_h,
             'libre_days': lib, 'vac_days': vac, 'med_days': med, 'sim_days': sim,
             'exclude_from_avg': excl,
@@ -282,6 +324,10 @@ def build_dataset():
     for fpath in xlsx_files:
         fname = os.path.basename(fpath)
         cfg_entry = file_map.get(fname)
+
+        # Extraer base del nombre de archivo (nuevo formato tiene precedencia)
+        base_from_fname = detect_base_from_filename(fname)
+
         try:
             xl = pd.ExcelFile(fpath)
         except Exception as e:
@@ -312,10 +358,11 @@ def build_dataset():
                 else:
                     role = detect_role(fname, sheet_name)
 
-                recs = parse_sheet(df, period, role)
+                recs = parse_sheet(df, period, role, base_override=base_from_fname)
                 all_records.extend(recs)
                 lbl = PERIOD_LABELS_MAP.get(period, period)
-                print('  ok ' + fname + '/' + sheet_name + ': ' + lbl + ' ' + role + ' ' + str(len(recs)) + 'p')
+                base_str = (' [' + base_from_fname + ']') if base_from_fname else ''
+                print('  ok ' + fname + '/' + sheet_name + ': ' + lbl + ' ' + role + base_str + ' ' + str(len(recs)) + 'p')
             except Exception as e:
                 print('  x ' + fname + '/' + sheet_name + ': ' + str(e))
 
@@ -344,9 +391,13 @@ def build_dataset():
             summary[key]['turnos_programados'] = r['turnos']
         if rk == 'actual' and r.get('vuelos') is not None:
             summary[key]['vuelos_efectuados'] = r['vuelos']
+        # Actualizar base si viene del nombre del archivo (más confiable)
+        if base_from_fname:
+            summary[key]['base'] = r['base']
 
     records = list(summary.values())
     periods = sorted(set(r['period'] for r in records))
+    bases   = sorted(set(r['base'] for r in records if r['base']))
 
     names_by_grp = defaultdict(set)
     for r in records:
@@ -355,6 +406,7 @@ def build_dataset():
     print('\n' + '-'*50)
     print('Total registros: ' + str(len(records)))
     print('Periodos: ' + str([PERIOD_LABELS_MAP.get(p,p) for p in periods]))
+    print('Bases: ' + str(bases))
     for g, ns in sorted(names_by_grp.items()):
         print('  ' + g + ': ' + str(len(ns)) + ' pilotos')
 
@@ -532,19 +584,32 @@ def generate_html(records, periods):
         "document.getElementById('periodPill').textContent = Object.values(PERIOD_LABELS).join(' \u00b7 ');\n"
         "document.getElementById('periodsHint').textContent = 'Per\u00edodos: ' + Object.values(PERIOD_LABELS).join(' \u00b7 ');\n"
         '\n'
+        '// Populate base dropdown dynamically from data\n'
+        'const allBases = [...new Set(RAW.map(r => r.base).filter(Boolean))].sort();\n'
+        "const selBase = document.getElementById('selBase');\n"
+        "allBases.forEach(b => { const o = document.createElement('option'); o.value = o.textContent = b; selBase.appendChild(o); });\n"
+        '\n'
         'let blockChartInst = null, compareChartInst = null;\n'
         "const selGroup = document.getElementById('selGroup');\n"
         "const selPilot = document.getElementById('selPilot');\n"
         '\n'
-        "selGroup.addEventListener('change', () => {\n"
+        'function getActiveBase() { return selBase.value || null; }\n'
+        '\n'
+        'function refreshPilotList() {\n'
         '  const g = selGroup.value;\n'
-        '  const names = [...new Set(RAW.filter(r => r.pos_group === g).map(r => r.name))].sort((a,b) => a.localeCompare(b, "es"));\n'
-        "  selPilot.innerHTML = '<option value=\"\">— Seleccionar tripulante —</option>';\n"
+        '  const base = getActiveBase();\n'
+        '  if (!g) return;\n'
+        '  const filtered = RAW.filter(r => r.pos_group === g && (!base || r.base === base));\n'
+        '  const names = [...new Set(filtered.map(r => r.name))].sort((a,b) => a.localeCompare(b, "es"));\n'
+        "  selPilot.innerHTML = '<option value=\"\">\\u2014 Seleccionar tripulante \\u2014</option>';\n"
         '  names.forEach(n => { const o = document.createElement("option"); o.value = o.textContent = n; selPilot.appendChild(o); });\n'
-        '  selPilot.disabled = false;\n'
+        '  selPilot.disabled = names.length === 0;\n'
         "  document.getElementById('placeholder').style.display = 'flex';\n"
         "  document.getElementById('dashboard').style.display = 'none';\n"
-        '});\n'
+        '}\n'
+        '\n'
+        "selBase.addEventListener('change', () => { refreshPilotList(); });\n"
+        "selGroup.addEventListener('change', () => { refreshPilotList(); });\n"
         "selPilot.addEventListener('change', () => { if (selPilot.value) render(selPilot.value, selGroup.value); });\n"
         '\n'
         'function fmt(v, d) { d = d === undefined ? 1 : d; if (v == null || +v === 0) return "\u2014"; return (+v).toFixed(d); }\n'
@@ -598,17 +663,11 @@ def generate_html(records, periods):
         '    \'<div class="kpi k-sand"><div class="kpi-label">Prog. vs Efectuado</div><div class="kpi-val">\' + fmt(Math.abs(pva),1) + \'<span class="kpi-unit">%</span></div><div class="kpi-footer"><span class="kpi-vs">P:<b>\' + fmt(accProg,0) + \'h</b> E:<b>\' + fmt(accAct,0) + \'h</b></span><span class="delta \' + (pva>=0?"d-up":"d-down") + \'">\' + (pva>=0?"\\u25b2":"\\u25bc") + \' ef.</span></div></div>\';\n'
         '\n'
         '  // Line chart\n'
-        '  // pData: muestra efectuado si existe, si no programado (meses futuros/sin efectuado aún)\n'
-        '  // gData: promedio del cargo completo, pilotos activos sin ausencias prolongadas\n'
-        '  //        usa efectuado si existe, si no programado — mismo criterio que pData\n'
         '  const excl  = pr.filter(r => r.exclude_from_avg).map(r => r.period);\n'
         '  function bestBlock(r) { return (r.block_h_actual && r.block_h_actual > 0) ? r.block_h_actual : (r.block_h_programmed || 0); }\n'
         '  function isProgrammedOnly(r) { return !(r.block_h_actual && r.block_h_actual > 0) && (r.block_h_programmed && r.block_h_programmed > 0); }\n'
         '  const pData = PERIODS.map(p => { const r = pr.find(x => x.period===p); return r ? bestBlock(r) : null; });\n'
-        '  // progOnlyPeriods: períodos donde el piloto solo tiene programado (sin efectuado)\n'
         '  const progOnlyIdx = PERIODS.map((p,i) => { const r = pr.find(x => x.period===p); return (r && isProgrammedOnly(r)) ? i : -1; }).filter(i => i>=0);\n'
-        '  // gData: promedio del segmento comparable (mismo cargo, sin ausencias)\n'
-        '  // Excluye al piloto seleccionado del cálculo del promedio\n'
         '  const gData = PERIODS.map(p => {\n'
         '    const peers = gr.filter(r => r.name !== pilotName && !r.exclude_from_avg && bestBlock(r) > 0);\n'
         '    const inPeriod = peers.filter(r => r.period === p);\n'
@@ -761,7 +820,7 @@ def generate_html(records, periods):
         '<body>\n'
         '<div class="shell">\n'
         '<!-- Hamburger mobile button -->\n'
-        '<button class="hamburger" id="menuBtn" aria-label="Abrir menú"><span></span><span></span><span></span></button>\n'
+        '<button class="hamburger" id="menuBtn" aria-label="Abrir men\u00fa"><span></span><span></span><span></span></button>\n'
         '<div class="sidebar-overlay" id="overlay"></div>\n'
         '<div class="sidebar" id="sidebar">\n'
         '  <div class="sidebar-top">\n'
@@ -772,6 +831,11 @@ def generate_html(records, periods):
         '    <div class="brand-sub" style="margin-left:38px">Digital Copilot</div>\n'
         '  </div>\n'
         '  <div class="filters">\n'
+        '    <div class="f-block"><div class="f-label">Base</div>\n'
+        '      <select class="f-select" id="selBase">\n'
+        '        <option value="">Todas las bases</option>\n'
+        '      </select>\n'
+        '    </div>\n'
         '    <div class="f-block"><div class="f-label">Cargo</div>\n'
         '      <select class="f-select" id="selGroup">\n'
         '        <option value="">\u2014 Seleccionar cargo \u2014</option>\n'
@@ -814,7 +878,7 @@ def generate_html(records, periods):
         '    <div id="placeholder" style="display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;gap:14px;color:var(--dim);padding:60px 0;">\n'
         '      <svg width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.2" viewBox="0 0 24 24" style="stroke:var(--border2)"><path d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>\n'
         '      <div style="font-family:var(--display);font-size:18px;color:var(--sand-400)">SDC \u00b7 SPSKY Digital Copilot</div>\n'
-        '      <div style="font-size:12px;text-align:center;max-width:300px;line-height:1.7;color:var(--muted)">Seleccione un cargo y un tripulante para visualizar sus indicadores de productividad.</div>\n'
+        '      <div style="font-size:12px;text-align:center;max-width:300px;line-height:1.7;color:var(--muted)">Seleccione una base, cargo y tripulante para visualizar sus indicadores de productividad.</div>\n'
         '      <div style="font-size:10px;font-family:var(--mono);color:var(--dim);margin-top:4px" id="periodsHint"></div>\n'
         '    </div>\n'
         '    <div id="dashboard" style="display:none;flex-direction:column;gap:16px;">\n'
