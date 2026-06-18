@@ -326,6 +326,171 @@ def build_dataset():
     return records, periods
 
 
+
+def build_js_group():
+    # Group view JS + unified selMonth handler
+    p1 = (
+        "\n// GROUP VIEW\n"
+        "let groupChartInst = null;\n"
+        "function renderGroup(group) {\n"
+        "  document.getElementById('placeholder').style.display = 'none';\n"
+        "  document.getElementById('dashboard').style.display = 'flex';\n"
+        "  document.getElementById('groupSection').style.display = 'flex';\n"
+        "  document.getElementById('individualSection').style.display = 'none';\n"
+        "  const latestPeriod = PERIODS[PERIODS.length - 1];\n"
+        "  selMonth.innerHTML = '';\n"
+        "  [...PERIODS].reverse().forEach(p => {\n"
+        "    const o = document.createElement('option');\n"
+        "    o.value = p; o.textContent = PERIOD_LABELS[p] || p;\n"
+        "    selMonth.appendChild(o);\n"
+        "  });\n"
+        "  selMonth.value = latestPeriod;\n"
+        "  selMonth.disabled = false;\n"
+        "  const gLabel = {Capit\u00e1n:'CP','Primer Oficial':'FO',Instructor:'INS'}[group] || group.substring(0,2).toUpperCase();\n"
+        "  document.getElementById('sideAvatar').textContent = gLabel;\n"
+        "  document.getElementById('sideName').textContent = group;\n"
+        "  document.getElementById('sidePos').textContent = 'Vista grupal';\n"
+        "  document.getElementById('pageTitle').innerHTML = '<span>' + group + '</span> \u00b7 Resumen del cargo';\n"
+        "  document.getElementById('pageSub').textContent = 'Vista grupal \u00b7 ' + Object.values(PERIOD_LABELS).join(' \u00b7 ');\n"
+        "  currentView = 'resumen';\n"
+        "  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));\n"
+        "  document.querySelector('[data-view=\"resumen\"]').classList.add('active');\n"
+        "  document.querySelectorAll('.view-section').forEach(s => s.classList.remove('active'));\n"
+        "  document.getElementById('view-resumen').classList.add('active');\n"
+        "  document.querySelectorAll('.nav-item:not([data-view=\"resumen\"])').forEach(n => {\n"
+        "    n.style.opacity = '0.4'; n.style.pointerEvents = 'none';\n"
+        "  });\n"
+        "  renderGroupKPIs(group, latestPeriod);\n"
+        "  renderGroupCharts(group);\n"
+        "}\n"
+    )
+    p2 = (
+        "\nfunction enablePilotNav() {\n"
+        "  document.querySelectorAll('.nav-item').forEach(n => {\n"
+        "    n.style.opacity = ''; n.style.pointerEvents = '';\n"
+        "  });\n"
+        "}\n"
+        "\nfunction groupActivePilots(group, period) {\n"
+        "  return RAW.filter(r =>\n"
+        "    r.pos_group === group &&\n"
+        "    r.period === period &&\n"
+        "    (r.block_h_actual || r.block_h_programmed || 0) > 0 &&\n"
+        "    (r.vac_days + r.med_days) <= 5\n"
+        "  );\n"
+        "}\n"
+    )
+    p3 = (
+        "\nfunction renderGroupKPIs(group, period) {\n"
+        "  const active = groupActivePilots(group, period);\n"
+        "  const lp = period;\n"
+        "  const blockVals = active.map(r => r.block_h_actual || r.block_h_programmed || 0).filter(v=>v>0);\n"
+        "  const dutyVals  = active.map(r => r.duty_h_actual  || r.duty_h_programmed  || 0).filter(v=>v>0);\n"
+        "  const libreVals = active.map(r => r.libre_days || 0);\n"
+        "  const avgB = avg(blockVals);\n"
+        "  const avgD = avg(dutyVals);\n"
+        "  const avgL = avg(libreVals);\n"
+        "  const maxB = blockVals.length ? Math.max(...blockVals) : 0;\n"
+        "  const minB = blockVals.length ? Math.min(...blockVals) : 0;\n"
+        "  const allInPeriod = RAW.filter(r=>r.pos_group===group&&r.period===period);\n"
+        "  const nTotal  = [...new Set(allInPeriod.map(r=>r.name))].length;\n"
+        "  const nActive = [...new Set(active.map(r=>r.name))].length;\n"
+        "  const nExcl   = nTotal - nActive;\n"
+        "  const nAlert  = active.filter(r=>(r.block_h_actual||r.block_h_programmed||0)>85).length;\n"
+        "  const nDanger = active.filter(r=>(r.block_h_actual||r.block_h_programmed||0)>100).length;\n"
+        "  const nLibreLow = active.filter(r=>(r.libre_days||0)<8).length;\n"
+        "  const lbl = PERIOD_LABELS[lp]||lp;\n"
+        "  document.getElementById('kpiRow').innerHTML =\n"
+        "    '<div class=\"kpi k-p1\"><div class=\"kpi-label\">Block Hours prom. \u00b7 ' + lbl + '</div><div class=\"kpi-val\">' + fmt(avgB) + '<span class=\"kpi-unit\">h</span></div><div class=\"kpi-footer\"><span class=\"kpi-vs\">Rango: <b>' + minB.toFixed(1) + '\u2013' + maxB.toFixed(1) + 'h</b></span></div></div>' +\n"
+        "    '<div class=\"kpi k-p2\"><div class=\"kpi-label\">Duty Hours prom. \u00b7 ' + lbl + '</div><div class=\"kpi-val\">' + fmt(avgD) + '<span class=\"kpi-unit\">h</span></div><div class=\"kpi-footer\"><span class=\"kpi-vs\">' + nActive + ' pilotos activos</span></div></div>' +\n"
+        "    '<div class=\"kpi k-g1\"><div class=\"kpi-label\">D\u00edas libres prom. \u00b7 ' + lbl + '</div><div class=\"kpi-val\">' + fmt(avgL,1) + '<span class=\"kpi-unit\">d</span></div><div class=\"kpi-footer\"><span class=\"kpi-vs\">M\u00ednimo: 8d</span><span class=\"delta ' + (nLibreLow>0?'d-warn':'d-up') + '\">' + nLibreLow + ' bajo m\u00edn.</span></div></div>' +\n"
+        "    '<div class=\"kpi k-g2\"><div class=\"kpi-label\">Pilotos activos \u00b7 ' + lbl + '</div><div class=\"kpi-val\">' + nActive + '<span class=\"kpi-unit\">/ ' + nTotal + '</span></div><div class=\"kpi-footer\"><span class=\"kpi-vs\">Excluidos (aus. >5d): <b>' + nExcl + '</b></span></div></div>' +\n"
+        "    '<div class=\"kpi ' + (nDanger>0?'k-r1':nAlert>0?'k-p2':'k-g3') + '\"><div class=\"kpi-label\">En zona alerta DAN 121</div><div class=\"kpi-val\">' + nAlert + '<span class=\"kpi-unit\"> pilotos</span></div><div class=\"kpi-footer\"><span class=\"kpi-vs\">Sobre 85h block</span><span class=\"delta ' + (nDanger>0?'d-down':nAlert>0?'d-warn':'d-up') + '\">' + nDanger + ' sobre 100h</span></div></div>';\n"
+    )
+    p4 = (
+        "  const sorted = [...active].sort((a,b)=>(b.block_h_actual||b.block_h_programmed||0)-(a.block_h_actual||a.block_h_programmed||0));\n"
+        "  let tbl = '<table class=\"comp-table\"><thead><tr><th>#</th><th>Tripulante</th><th>Block Hours</th><th>Duty Hours</th><th>D\u00edas libres</th><th>Blancos</th><th>DAN 121</th></tr></thead><tbody>';\n"
+        "  sorted.forEach((r,i) => {\n"
+        "    const bh = r.block_h_actual||r.block_h_programmed||0;\n"
+        "    const dh = r.duty_h_actual||r.duty_h_programmed||0;\n"
+        "    const lib = r.libre_days||0;\n"
+        "    const bl  = r.dias_blancos;\n"
+        "    const isProg = !(r.block_h_actual>0)&&bh>0;\n"
+        "    const danSt = bh>100?'danger':bh>85?'warn':'ok';\n"
+        "    const danColors = {ok:'#1A7A00',warn:'#6B1A8A',danger:'#C0392B'};\n"
+        "    const danDot = '<span style=\"color:' + danColors[danSt] + '\">●</span>';\n"
+        "    const nameShort = r.name.split(' ').slice(0,3).join(' ');\n"
+        "    const prog = isProg ? '<span style=\"font-size:9px;color:var(--muted)\"> (p)</span>' : '';\n"
+        "    tbl += '<tr style=\"cursor:pointer\" onclick=\"selectPilot(\\'' + r.name + '\\')\">' +\n"
+        "           '<td style=\"font-family:var(--mono);font-size:10px;color:var(--muted)\">' + (i+1) + '</td>' +\n"
+        "           '<td style=\"font-size:12px;color:var(--text2)\">' + nameShort + '</td>' +\n"
+        "           '<td style=\"font-family:var(--mono);color:' + (bh>100?'var(--danger)':'var(--text2)') + '\">' + bh.toFixed(1) + 'h' + prog + '</td>' +\n"
+        "           '<td style=\"font-family:var(--mono)\">' + (dh>0?dh.toFixed(1)+'h':'\u2014') + '</td>' +\n"
+        "           '<td style=\"font-family:var(--mono);color:' + (lib<8?'var(--danger)':'var(--text2)') + '\">' + lib + 'd</td>' +\n"
+        "           '<td style=\"font-family:var(--mono)\">' + (bl!==null?bl+'d':'\u2014') + '</td>' +\n"
+        "           '<td>' + danDot + '</td></tr>';\n"
+        "  });\n"
+        "  if (!sorted.length) tbl += '<tr><td colspan=\"7\" style=\"text-align:center;color:var(--muted);padding:16px\">Sin datos para este per\u00edodo</td></tr>';\n"
+        "  tbl += '</tbody></table>';\n"
+        "  document.getElementById('groupTableWrap').innerHTML = tbl;\n"
+        "  const excNote = document.getElementById('groupExclNote');\n"
+        "  if(nExcl>0){ excNote.style.display='flex'; excNote.querySelector('span').textContent=nExcl+' piloto(s) excluido(s) del c\u00e1lculo por ausencias >5 d\u00edas en el mes.'; }\n"
+        "  else excNote.style.display='none';\n"
+        "}\n"
+    )
+    p5 = (
+        "\nfunction renderGroupCharts(group) {\n"
+        "  const gData = PERIODS.map(p => {\n"
+        "    const active = groupActivePilots(group, p);\n"
+        "    const vals = active.map(r=>r.block_h_actual||r.block_h_programmed||0).filter(v=>v>0);\n"
+        "    return vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : null;\n"
+        "  });\n"
+        "  const nData = PERIODS.map(p => groupActivePilots(group, p).length);\n"
+        "  const ctx = document.getElementById('groupBlockChart').getContext('2d');\n"
+        "  if (groupChartInst) groupChartInst.destroy();\n"
+        "  groupChartInst = new Chart(ctx, {\n"
+        "    type:'line',\n"
+        "    data:{ labels:PERIODS.map(p=>PERIOD_LABELS[p]||p), datasets:[\n"
+        "      { label:'Block Hours prom.', data:gData, borderColor:'#671E77',\n"
+        "        backgroundColor(c){return makeGrad(ctx,c.chart.chartArea,'rgba(103,30,119,.18)','rgba(103,30,119,.01)');},\n"
+        "        borderWidth:2.5, tension:.35, fill:true, spanGaps:true,\n"
+        "        pointBackgroundColor:'#671E77', pointRadius:5, pointHoverRadius:7 }\n"
+        "    ]},\n"
+        "    options:{ responsive:true, maintainAspectRatio:false, interaction:{mode:'index',intersect:false},\n"
+        "      plugins:{ legend:{display:false}, tooltip:{ ...TOOLTIP_DEFAULTS,\n"
+        "        callbacks:{\n"
+        "          title(i){ return PERIOD_LABELS[PERIODS[i[0].dataIndex]]||PERIODS[i[0].dataIndex]; },\n"
+        "          label(i){ if(!i.raw)return null; return '  Block Hours prom.: '+i.raw.toFixed(1)+'h'; },\n"
+        "          afterBody(i){ const n=nData[i[0].dataIndex]; return n?['  Pilotos activos: '+n]:[]; }\n"
+        "        }\n"
+        "      }},\n"
+        "      scales:{\n"
+        "        x:{grid:{color:'rgba(103,30,119,.10)'},ticks:{color:'#8B6FA8',font:{size:11,family:\"'DM Mono',monospace\"}},border:{display:false}},\n"
+        "        y:{min:0,grid:{color:'rgba(103,30,119,.10)'},ticks:{color:'#8B6FA8',font:{size:11,family:\"'DM Mono',monospace\"},callback:v=>v+'h'},border:{display:false}}\n"
+        "      }\n"
+        "    }\n"
+        "  });\n"
+        "}\n"
+        "\nfunction selectPilot(name) {\n"
+        "  selPilot.value = name;\n"
+        "  enablePilotNav();\n"
+        "  render(name, selGroup.value);\n"
+        "}\n"
+        "\n// Unified selMonth handler\n"
+        "selMonth.addEventListener('change', () => {\n"
+        "  if (!selMonth.value) return;\n"
+        "  if (selPilot.value === '__GROUP__') {\n"
+        "    renderGroupKPIs(selGroup.value, selMonth.value);\n"
+        "  } else if (selPilot.value) {\n"
+        "    renderKPIs(selPilot.value, selGroup.value, selMonth.value);\n"
+        "    renderDAN(selPilot.value, selGroup.value, selMonth.value);\n"
+        "    renderResumenAlerts(selPilot.value, selGroup.value, selMonth.value);\n"
+        "    document.getElementById('danMonthLabel').textContent = PERIOD_LABELS[selMonth.value] || selMonth.value;\n"
+        "  }\n"
+        "});\n"
+    )
+    return p1 + p2 + p3 + p4 + p5
+
+
 def generate_html(records, periods):
     period_labels = {p: PERIOD_LABELS_MAP.get(p, p) for p in periods}
     DATA_JS    = json.dumps(records,       ensure_ascii=False, default=str)
@@ -526,18 +691,24 @@ def build_js(DATA_JS, PERIODS_JS, LABELS_JS):
         '\n'
         'selGroup.addEventListener("change", () => {\n'
         '  const g = selGroup.value;\n'
+        '  if (!g) return;\n'
         '  const names = [...new Set(RAW.filter(r => r.pos_group === g).map(r => r.name))].sort((a,b) => a.localeCompare(b, "es"));\n'
-        '  selPilot.innerHTML = \'<option value="">— Seleccionar tripulante —</option>\';\n'
+        '  selPilot.innerHTML = "";\n'
+        '  // --- Ver todos --- first\n'
+        '  const oAll = document.createElement("option");\n'
+        '  oAll.value = "__GROUP__"; oAll.textContent = "— Ver todos —";\n'
+        '  selPilot.appendChild(oAll);\n'
         '  names.forEach(n => { const o = document.createElement("option"); o.value = o.textContent = n; selPilot.appendChild(o); });\n'
         '  selPilot.disabled = false;\n'
-        '  selMonth.innerHTML = \'<option value="">— Seleccione un tripulante —</option>\';\n'
-        '  selMonth.disabled = true;\n'
-        '  document.getElementById("placeholder").style.display = "flex";\n'
-        '  document.getElementById("dashboard").style.display = "none";\n'
+        '  // Show group view immediately\n'
+        '  renderGroup(g);\n'
         '});\n'
         '\n'
         'selPilot.addEventListener("change", () => {\n'
-        '  if (selPilot.value) render(selPilot.value, selGroup.value);\n'
+        '  const v = selPilot.value, g = selGroup.value;\n'
+        '  if (!v) return;\n'
+        '  if (v === "__GROUP__") renderGroup(g);\n'
+        '  else render(v, g);\n'
         '});\n'
         '\n'
         'selMonth.addEventListener("change", () => {\n'
@@ -562,6 +733,9 @@ def build_js(DATA_JS, PERIODS_JS, LABELS_JS):
         'function render(pilotName, group) {\n'
         '  document.getElementById("placeholder").style.display = "none";\n'
         '  document.getElementById("dashboard").style.display = "flex";\n'
+        '  document.getElementById("groupSection").style.display = "none";\n'
+        '  document.getElementById("individualSection").style.display = "block";\n'
+        '  enablePilotNav();\n'
         '  const pr = RAW.filter(r => r.name === pilotName);\n'
         '  const gr = RAW.filter(r => r.pos_group === group);\n'
         '  const latest = pr.filter(r => r.block_h_actual > 0).sort((a,b) => b.period.localeCompare(a.period))[0] || pr.sort((a,b) => b.period.localeCompare(a.period))[0];\n'
@@ -1083,6 +1257,20 @@ def build_html(CSS, JS, LOGO_B64=""):
 
         # ── VIEW: RESUMEN ──
         '      <div class="view-section active" id="view-resumen">\n'
+        '        <!-- ── GROUP VIEW ── -->\n'
+        '        <div id="groupSection" style="display:none;flex-direction:column;gap:14px">\n'
+        '          <div class="card">\n'
+        '            <div class="card-head"><div><div class="card-title">Block Hours promedio \u00b7 Evoluci\u00f3n del cargo</div><div class="card-sub">Excluye pilotos con ausencias >5 d\u00edas en el mes</div></div></div>\n'
+        '            <div class="chart-wrap"><canvas id="groupBlockChart"></canvas></div>\n'
+        '          </div>\n'
+        '          <div class="card">\n'
+        '            <div class="card-head"><div class="card-title">Ranking del cargo \u00b7 Mes seleccionado</div><div class="card-sub">Haz clic en un nombre para ver su perfil</div></div>\n'
+        '            <div id="groupTableWrap" style="overflow-x:auto"></div>\n'
+        '            <div class="excl-note" id="groupExclNote" style="display:none;margin-top:10px"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><span></span></div>\n'
+        '          </div>\n'
+        '        </div>\n'
+        '        <!-- ── INDIVIDUAL VIEW ── -->\n'
+        '        <div id="individualSection">\n'
         '        <div class="kpi-grid" id="kpiRow"></div>\n'
         '        <div class="card">\n'
         '          <div class="card-head">\n'
@@ -1106,9 +1294,10 @@ def build_html(CSS, JS, LOGO_B64=""):
         '        </div>\n'
         '        <div class="bottom-row">\n'
         '          <div class="card"><div class="card-head"><div class="card-title">Acumulado &amp; Proyecci\u00f3n</div><div class="card-sub">Basado en meses activos</div></div><div class="prog-list" id="progList"></div></div>\n'
-        '          <div class="card"><div class="card-head"><div class="card-title">Cumplimiento DAN 121</div><div class="card-sub">Mes seleccionado</div></div><div class="alert-list" id="alertListResumen"></div></div>\n'
-        '        </div>\n'
-        '      </div>\n'
+        '          <div class="card"><div class="card-head"><div class="card-title">Cumplimiento DAN 121</div><div class="card-sub">Mes seleccionado</div></div><div class="alert-list" id="alertListResumen\"></div></div>\n'
+        '        </div>\\n'
+        '        </div>\\n'
+        '      </div>\\n'
 
         # ── VIEW: BLOCK HOURS ──
         '      <div class="view-section" id="view-bloque">\n'
@@ -1206,13 +1395,7 @@ def generate_html(records, periods):
         '  alerts += \'<div style="margin-top:6px;padding:9px 11px;background:var(--s2);border-radius:7px;font-size:10px;color:var(--muted);line-height:1.5;font-family:var(--mono)">Indicativo solamente. C\u00e1lculo oficial es responsabilidad de Operaciones.</div>\';\n'
         '  document.getElementById("alertListResumen").innerHTML = alerts;\n'
         '}\n'
-        '\n// Patch selMonth listener to also update resumen alerts\n'
-        'selMonth.addEventListener("change", () => {\n'
-        '  if (selMonth.value && selPilot.value) {\n'
-        '    renderResumenAlerts(selPilot.value, selGroup.value, selMonth.value);\n'
-        '    document.getElementById("danMonthLabel").textContent = PERIOD_LABELS[selMonth.value] || selMonth.value;\n'
-        '  }\n'
-        '});\n'
+        '// selMonth handled in build_js_group\n'
         '\n// Patch render to also call resumen alerts and block detail table\n'
         'const _origRender = render;\n'
         'render = function(pilotName, group) {\n'
@@ -1266,7 +1449,7 @@ def generate_html(records, periods):
         '};\n'
     )
 
-    JS = JS_base + JS_p2 + JS_p3 + JS_p4 + JS_p5 + JS_alerts
+    JS = JS_base + build_js_group() + JS_p2 + JS_p3 + JS_p4 + JS_p5 + JS_alerts
 
     # Use real logo from original parser if embedded, else placeholder
     return build_html(CSS, JS)
