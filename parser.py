@@ -609,10 +609,10 @@ def generate_html(records, periods):
         '  const gr = RAW.filter(r => r.pos_group === group);\n'
         '  const latest = pr.filter(r => r.block_h_actual > 0).sort((a,b) => b.period.localeCompare(a.period))[0] || pr[0];\n'
         '  const lp = latest ? latest.period : PERIODS[PERIODS.length-1];\n'
-        '  const safeName = pilotName.replace(/[\\r\\n\\t]+/g, " ").trim();\n'
+        '  const safeName = pilotName.replace(/[\\u000d\\u000a\\u0009]+/g, " ").trim();\n'
         '  const init = safeName.split(" ").filter((_,i) => i < 2).map(w => w[0]).join("");\n'
-        '  const safeBase = latest ? String(latest.base || "").replace(/[\\r\\n\\t]+/g, " ").trim() : "";\n'
-        '  const safePos  = latest ? String(latest.pos  || "").replace(/[\\r\\n\\t]+/g, " ").trim() : group;\n'
+        '  const safeBase = latest ? String(latest.base || "").replace(/[\\u000d\\u000a\\u0009]+/g, " ").trim() : "";\n'
+        '  const safePos  = latest ? String(latest.pos  || "").replace(/[\\u000d\\u000a\\u0009]+/g, " ").trim() : group;\n'
         "  document.getElementById('sideAvatar').textContent = init;\n"
         "  document.getElementById('sideName').textContent = safeName.split(' ').slice(0,2).join(' ');\n"
         "  document.getElementById('sidePos').textContent = safePos + ' \u00b7 ' + safeBase;\n"
